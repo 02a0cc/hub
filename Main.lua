@@ -246,18 +246,6 @@ local function GetTraitRemote()
     return nil
 end
 
-local function GetTraitRerolls()
-    local player = game.Players.LocalPlayer
-    local leaderstats = player:FindFirstChild('leaderstats') or player:FindFirstChild('Leaderstats')
-    if not leaderstats then return 0 end
-    local rerolls = leaderstats:FindFirstChild('Trait Rerolls') or leaderstats:FindFirstChild('Rerolls')
-    if rerolls then
-        return tonumber(rerolls.Value) or 0
-    end
-    -- Fallback: tentar em playerGui ou outras pastas
-    return 0
-end
-
 -- Fighter Dropdown
 local FighterLabel = TraitGroupbox:CreateLabel({
     Name = "Select Fighter"
@@ -318,18 +306,6 @@ local TraitDropdown = TraitLabel:AddDropdown({
 
 TraitGroupbox:CreateDivider()
 
--- Min Rerolls TextBox
-local MinRerollsInput = TraitGroupbox:CreateInput({
-    Name = "Min Rerolls (freeze below)",
-    Placeholder = "0",
-    CurrentValue = "0",
-    Callback = function(Value)
-        print('[cb] Min Rerolls set to:', Value)
-    end,
-}, "MinRerollsInput")
-
-TraitGroupbox:CreateDivider()
-
 AutoTraitToggle = TraitGroupbox:CreateToggle({
     Name = "Auto Trait",
     CurrentValue = false,
@@ -341,30 +317,10 @@ AutoTraitToggle = TraitGroupbox:CreateToggle({
 
 -- Auto Trait loop
 local traitCooldown = false
-local traitFrozen = false
 task.spawn(function()
     while task.wait(0.01) do
         if not AutoTraitToggle then break end
-        -- Verificar se deve congelar por falta de rerolls
-        local minRerolls = tonumber(MinRerollsInput and MinRerollsInput.Values.CurrentValue or "0") or 0
-        if minRerolls > 0 then
-            local currentRerolls = GetTraitRerolls()
-            if currentRerolls < minRerolls then
-                if not traitFrozen then
-                    traitFrozen = true
-                    print('[Trait] Frozen! Rerolls:', currentRerolls, '< Min:', minRerolls)
-                end
-            else
-                if traitFrozen then
-                    traitFrozen = false
-                    print('[Trait] Unfrozen! Rerolls:', currentRerolls, '>= Min:', minRerolls)
-                end
-            end
-        else
-            traitFrozen = false
-        end
-        -- Só prossegue se não estiver congelado
-        if AutoTraitToggle.Values.CurrentValue and not traitCooldown and not traitFrozen then
+        if AutoTraitToggle.Values.CurrentValue and not traitCooldown then
             if selectedFighter and #selectedTraits > 0 then
                 -- Verificar trait atual do fighter
                 local currentTrait = GetCurrentFighterTrait(selectedFighter.UUID)
@@ -680,11 +636,28 @@ TowerWaveInput = TowerGroupbox:CreateInput({
     end,
 }, "TowerWaveInput")
 
--- Auto Create loop: cria automaticamente a cada 30 segundos (only if not in Trial AND not in Tower)
+-- Global trial time blocker: true durante todos os 60 segundos dos minutos :00 e :30
+local function IsTrialTime()
+    local minute = tonumber(os.date('%M')) or 0
+    local second = tonumber(os.date('%S')) or 0
+    -- Bloqueia durante todos os 60s dos minutos :00 e :30 + 10s extras do próximo minuto
+    if minute == 0 or minute == 30 then
+        return true
+    end
+    if minute == 1 and second <= 10 then
+        return true
+    end
+    if minute == 31 and second <= 10 then
+        return true
+    end
+    return false
+end
+
+-- Auto Create loop: cria automaticamente a cada 30 segundos (only if not in Trial AND not in Tower AND not Trial time)
 task.spawn(function()
     while task.wait(30) do
         if not TowerAutoCreateToggle then break end
-        if TowerAutoCreateToggle.Values.CurrentValue and not IsTrialActive() and not IsTowerActive() then
+        if TowerAutoCreateToggle.Values.CurrentValue and not IsTrialActive() and not IsTowerActive() and not IsTrialTime() then
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Create")
@@ -694,17 +667,13 @@ task.spawn(function()
     end
 end)
 
--- Auto Join loop: entra automaticamente a cada 1 segundo (only if not in Trial AND not in Tower)
+-- Auto Join loop: entra automaticamente a cada 1 segundo (only if not in Trial AND not in Tower AND not Trial time)
 local towerJoinCooldown = false
 task.spawn(function()
     while task.wait(1) do
         if not TowerAutoJoinToggle then break end
-        local minute = tonumber(os.date('%M')) or 0
-        local second = tonumber(os.date('%S')) or 0
-        -- Não entrar na Tower se for horário de Trial (:00 ou :30)
-        -- Também não entrar nos primeiros 5 segundos após :00 ou :30 (Trial pode estar abrindo)
-        local nearTrialTime = (minute == 0 and second < 30) or (minute == 30 and second < 30)
-        if TowerAutoJoinToggle.Values.CurrentValue and not IsTrialActive() and not IsTowerActive() and not towerJoinCooldown and not nearTrialTime then
+        -- Bloqueia completamente durante minutos :00 e :30
+        if TowerAutoJoinToggle.Values.CurrentValue and not IsTrialActive() and not IsTowerActive() and not towerJoinCooldown and not IsTrialTime() then
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Join")
@@ -750,13 +719,10 @@ task.spawn(function()
     local exiting = false
     while task.wait(1) do
         if not TowerAutoExitToggle then break end
-        -- Sair da Tower se for horário de Trial
-        local minute = tonumber(os.date('%M')) or 0
-        local second = tonumber(os.date('%S')) or 0
-        local isTrialTime = (minute == 0 or minute == 30)
-        if not exiting and IsTowerActive() and isTrialTime and not IsTrialActive() and second < 10 then
+        -- Sair da Tower se for horário de Trial (durante TODOS os 60 segundos dos minutos :00 e :30)
+        if not exiting and IsTowerActive() and IsTrialTime() and not IsTrialActive() then
             exiting = true
-            print('[Tower] Trial time approaching - Leaving tower!')
+            print('[Tower] Trial time - Leaving tower!')
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Leave")
@@ -779,26 +745,28 @@ task.spawn(function()
                         if bridge then
                             bridge:FireServer("Gamemodes", "TowerRaid", "Leave")
                             print('[Tower] Left tower!')
-                            -- Create 2s after exit
+                            -- Create 2s after exit (only if not Trial time)
                             task.delay(2, function()
-                                if TowerAutoCreateToggle and TowerAutoCreateToggle.Values.CurrentValue then
-                                    local bridge2 = GetBridgeRemote()
-                                    if bridge2 then
-                                        bridge2:FireServer("Gamemodes", "TowerRaid", "Create")
-                                        print('[Tower] AutoCreate triggered after exit!')
-                                        -- Join immediately after create
-                                        if TowerAutoJoinToggle and TowerAutoJoinToggle.Values.CurrentValue then
-                                            local bridge3 = GetBridgeRemote()
-                                            if bridge3 then
-                                                bridge3:FireServer("Gamemodes", "TowerRaid", "Join")
-                                                print('[Tower] AutoJoin triggered after create!')
+                                if not IsTrialTime() then
+                                    if TowerAutoCreateToggle and TowerAutoCreateToggle.Values.CurrentValue then
+                                        local bridge2 = GetBridgeRemote()
+                                        if bridge2 then
+                                            bridge2:FireServer("Gamemodes", "TowerRaid", "Create")
+                                            print('[Tower] AutoCreate triggered after exit!')
+                                            -- Join immediately after create
+                                            if TowerAutoJoinToggle and TowerAutoJoinToggle.Values.CurrentValue then
+                                                local bridge3 = GetBridgeRemote()
+                                                if bridge3 then
+                                                    bridge3:FireServer("Gamemodes", "TowerRaid", "Join")
+                                                    print('[Tower] AutoJoin triggered after create!')
+                                                end
                                             end
                                         end
-                                        exiting = false
                                     end
                                 else
-                                    exiting = false
+                                    print('[Tower] Trial time - skipping Create/Join after exit')
                                 end
+                                exiting = false
                             end)
                         end
                     end
