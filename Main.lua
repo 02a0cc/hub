@@ -863,23 +863,24 @@ end)
 -- ANTI AFK (roda automaticamente ao injetar)
 -- ============================================
 task.spawn(function()
-    local VirtualUser = game:GetService("VirtualUser")
     local Players = game:GetService("Players")
     local player = Players.LocalPlayer
     
     print('[Anti-AFK] Running!')
     
-    while task.wait(1) do
-        -- Resetar o tempo de inatividade movendo o mouse virtualmente
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton1(Vector2.new(728, 14), workspace.CurrentCamera.CFrame)
-        
-        -- Também simula um keypress para manter ativo
+    while task.wait(60) do
         local success = pcall(function()
-            VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-            task.wait(0.1)
-            VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local hrp = player.Character.HumanoidRootPart
+                local current = hrp.CFrame
+                hrp.CFrame = current * CFrame.new(0.01, 0, 0)
+                task.wait(0.1)
+                hrp.CFrame = current
+            end
         end)
+        if not success then
+            print('[Anti-AFK] Movement failed, retrying...')
+        end
     end
 end)
 
