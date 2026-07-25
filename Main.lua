@@ -62,6 +62,11 @@ local TraitGroupbox = MainTab:CreateGroupbox({
     Column = 2,
 }, "TraitGroupbox")
 
+local RollStarsGroupbox = MainTab:CreateGroupbox({
+    Name = "Auto RollStars",
+    Column = 1,
+}, "RollStarsGroupbox")
+
 -- ============================================
 -- MAIN TAB: Enemies (World)
 -- ============================================
@@ -348,7 +353,7 @@ task.spawn(function()
 end)
 
 -- ============================================
--- TRIAL/RAIDS TAB
+-- BRIDGE REMOTE (usado por RollStars e Trial/Tower)
 -- ============================================
 local function GetBridgeRemote()
     local rs = game:GetService("ReplicatedStorage")
@@ -358,6 +363,84 @@ local function GetBridgeRemote()
     end
     return nil
 end
+
+-- ============================================
+-- AUTO ROLLSTARS
+-- ============================================
+local rollStarsSelectedFighters = {}
+local RollStarsLabel = RollStarsGroupbox:CreateLabel({
+    Name = "Select Fighters"
+}, "RollStarsLabel")
+
+local RollStarsDropdown = RollStarsLabel:AddDropdown({
+    Options = (function()
+        local fighters = GetFighters()
+        local names = {}
+        for _, f in ipairs(fighters) do
+            table.insert(names, f.Display)
+        end
+        return names
+    end)(),
+    CurrentOptions = {},
+    Placeholder = "None Selected",
+    MultipleOptions = true,
+    Callback = function(Options)
+        rollStarsSelectedFighters = {}
+        if Options then
+            for _, opt in ipairs(Options) do
+                local text = type(opt) == "table" and opt.Text or tostring(opt)
+                local fighters = GetFighters()
+                for _, f in ipairs(fighters) do
+                    if f.Display == text then
+                        table.insert(rollStarsSelectedFighters, f)
+                        break
+                    end
+                end
+            end
+        end
+        local displays = {}
+        for _, f in ipairs(rollStarsSelectedFighters) do
+            table.insert(displays, f.Display)
+        end
+        print('[cb] RollStarsDropdown changed:', #rollStarsSelectedFighters, 'fighters:', table.concat(displays, ", "))
+    end,
+}, "RollStarsDropdown")
+
+RollStarsGroupbox:CreateDivider()
+
+local AutoRollStarsToggle = RollStarsGroupbox:CreateToggle({
+    Name = "Auto RollStars",
+    CurrentValue = false,
+    Style = 2,
+    Callback = function(Value)
+        print('[cb] Auto RollStars changed to:', Value)
+    end,
+}, "AutoRollStarsToggle")
+
+-- Auto RollStars loop (roda para todos os fighters selecionados)
+local rollStarsIndex = 1
+task.spawn(function()
+    while task.wait(0.01) do
+        if not AutoRollStarsToggle then break end
+        if AutoRollStarsToggle.Values.CurrentValue and #rollStarsSelectedFighters > 0 then
+            local bridge = GetBridgeRemote()
+            if bridge then
+                local fighter = rollStarsSelectedFighters[rollStarsIndex]
+                if fighter then
+                    print('[RollStars] Rerolling:', fighter.Display)
+                    bridge:FireServer("General", "RollStars", "Reroll", fighter.UUID)
+                end
+                rollStarsIndex = rollStarsIndex % #rollStarsSelectedFighters + 1
+            else
+                print('[RollStars] Bridge remote not found!')
+            end
+        end
+    end
+end)
+
+-- ============================================
+-- TRIAL/RAIDS TAB
+-- ============================================
 
 local function GetCurrentWave()
     local playerGui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
@@ -773,6 +856,30 @@ task.spawn(function()
                 end
             end
         end
+    end
+end)
+
+-- ============================================
+-- ANTI AFK (roda automaticamente ao injetar)
+-- ============================================
+task.spawn(function()
+    local VirtualUser = game:GetService("VirtualUser")
+    local Players = game:GetService("Players")
+    local player = Players.LocalPlayer
+    
+    print('[Anti-AFK] Running!')
+    
+    while task.wait(1) do
+        -- Resetar o tempo de inatividade movendo o mouse virtualmente
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton1(Vector2.new(728, 14), workspace.CurrentCamera.CFrame)
+        
+        -- Também simula um keypress para manter ativo
+        local success = pcall(function()
+            VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            task.wait(0.1)
+            VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        end)
     end
 end)
 
