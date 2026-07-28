@@ -251,12 +251,23 @@ local function GetTraitRemote()
     return nil
 end
 
--- Fighter Dropdown
+-- Fighter Dropdown (multi-select)
 local FighterLabel = TraitGroupbox:CreateLabel({
-    Name = "Select Fighter"
+    Name = "Select Fighters"
 }, "FighterLabel")
 
-local selectedFighter = nil
+-- selectedTraitFighters guarda a seleção do dropdown.
+-- traitQueue guarda apenas os fighters que ainda precisam receber uma trait alvo.
+local selectedTraitFighters = {}
+local traitQueue = {}
+
+local function ResetTraitQueue()
+    traitQueue = {}
+    for _, fighter in ipairs(selectedTraitFighters) do
+        table.insert(traitQueue, fighter)
+    end
+end
+
 local FighterDropdown = FighterLabel:AddDropdown({
     Options = (function()
         local fighters = GetFighters()
@@ -268,19 +279,30 @@ local FighterDropdown = FighterLabel:AddDropdown({
     end)(),
     CurrentOptions = {},
     Placeholder = "None Selected",
+    MultipleOptions = true,
     Callback = function(Options)
-        selectedFighter = nil
-        if Options and Options[1] then
-            local text = type(Options[1]) == "table" and Options[1].Text or tostring(Options[1])
+        selectedTraitFighters = {}
+        if Options then
             local fighters = GetFighters()
-            for _, f in ipairs(fighters) do
-                if f.Display == text then
-                    selectedFighter = f
-                    break
+            for _, opt in ipairs(Options) do
+                local text = type(opt) == "table" and opt.Text or tostring(opt)
+                for _, fighter in ipairs(fighters) do
+                    if fighter.Display == text then
+                        table.insert(selectedTraitFighters, fighter)
+                        break
+                    end
                 end
             end
         end
-        print('[cb] FighterDropdown changed:', selectedFighter and selectedFighter.Display or "None")
+
+        -- Se a seleção mudar, reinicia a fila com os fighters atualmente marcados.
+        ResetTraitQueue()
+
+        local displays = {}
+        for _, fighter in ipairs(selectedTraitFighters) do
+            table.insert(displays, fighter.Display)
+        end
+        print('[cb] FighterDropdown changed:', #selectedTraitFighters, 'fighters selected:', table.concat(displays, ", "))
     end,
 }, "FighterDropdown")
 
@@ -316,30 +338,39 @@ AutoTraitToggle = TraitGroupbox:CreateToggle({
     CurrentValue = false,
     Style = 2,
     Callback = function(Value)
+        if Value then
+            -- Cada nova ativação reprocessa todos os fighters marcados.
+            ResetTraitQueue()
+        end
         print('[cb] Auto Trait changed to:', Value)
     end,
 }, "AutoTraitToggle")
 
--- Auto Trait loop
+-- Auto Trait loop: mantém o primeiro fighter da fila até ele receber uma trait alvo.
+-- Ao concluir, remove somente esse fighter e passa automaticamente para o próximo.
 local traitCooldown = false
 task.spawn(function()
     while task.wait(0.01) do
         if not AutoTraitToggle then break end
         if AutoTraitToggle.Values.CurrentValue and not traitCooldown then
-            if selectedFighter and #selectedTraits > 0 then
-                -- Verificar trait atual do fighter
-                local currentTrait = GetCurrentFighterTrait(selectedFighter.UUID)
+            if #traitQueue > 0 and #selectedTraits > 0 then
+                local currentFighter = traitQueue[1]
+                local currentTrait = GetCurrentFighterTrait(currentFighter.UUID)
+
                 if currentTrait and table.find(selectedTraits, currentTrait) then
-                    -- Já tem uma das traits alvo, parar
-                    print('[Trait] Fighter already has trait:', currentTrait, '- Stopping!')
-                    AutoTraitToggle.Values.CurrentValue = false
+                    table.remove(traitQueue, 1)
+                    print('[Trait] Fighter completed:', currentFighter.Display, '| Trait:', currentTrait, '| Remaining:', #traitQueue)
+
+                    if #traitQueue == 0 then
+                        print('[Trait] All selected fighters have a target trait - Stopping!')
+                        AutoTraitToggle.Values.CurrentValue = false
+                    end
                 else
-                    -- Não tem, aplicar trait
                     local traitRemote = GetTraitRemote()
                     if traitRemote then
                         traitCooldown = true
-                        print('[Trait] Applying trait on:', selectedFighter.Display, '| Current:', currentTrait or 'None', '| Target:', table.concat(selectedTraits, ", "))
-                        traitRemote:InvokeServer(selectedFighter.UUID)
+                        print('[Trait] Applying trait on:', currentFighter.Display, '| Current:', currentTrait or 'None', '| Target:', table.concat(selectedTraits, ", "))
+                        traitRemote:InvokeServer(currentFighter.UUID)
                         task.delay(0.05, function()
                             traitCooldown = false
                         end)
