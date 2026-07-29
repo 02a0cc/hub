@@ -57,6 +57,11 @@ local TowerGroupbox = TowerTab:CreateGroupbox({
     Column = 1,
 }, "TowerGroupbox")
 
+local RaidGroupbox = TowerTab:CreateGroupbox({
+    Name = "AutoRaid",
+    Column = 2,
+}, "RaidGroupbox")
+
 local TraitGroupbox = MainTab:CreateGroupbox({
     Name = "Auto Trait",
     Column = 2,
@@ -501,12 +506,41 @@ local function GetCurrentTowerWave()
     return nil
 end
 
+local function GetCurrentRaidWave()
+    local playerGui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+    local waveFrame = playerGui:FindFirstChild("UI") and playerGui.UI:FindFirstChild("HUD") and playerGui.UI.HUD:FindFirstChild("Tower") and playerGui.UI.HUD.Tower:FindFirstChild("Frame") and playerGui.UI.HUD.Tower.Frame:FindFirstChild("Wave")
+    if waveFrame then
+        local value = waveFrame:FindFirstChild("Value")
+        if value then
+            local waveNum = tonumber(value.Text)
+            return waveNum
+        end
+    end
+    return nil
+end
+
 local function GetTowerEnemy()
     local Server = game.Workspace:FindFirstChild('Server')
     if not Server then return nil end
     local TowerRaid = Server:FindFirstChild('TowerRaid')
     if not TowerRaid then return nil end
     local Enemies = TowerRaid:FindFirstChild('Enemies')
+    if not Enemies then return nil end
+    for _, enemy in ipairs(Enemies:GetChildren()) do
+        if enemy:IsA('BasePart') and enemy.CFrame then
+            return enemy
+        end
+    end
+    return nil
+end
+
+local function GetRaidEnemy()
+    local Server = game.Workspace:FindFirstChild('Server')
+    if not Server then return nil end
+    local Raid = Server:FindFirstChild('Tower')
+    if not Raid then return nil end
+    local Enemies = Raid:FindFirstChild('Enemies')
     if not Enemies then return nil end
     for _, enemy in ipairs(Enemies:GetChildren()) do
         if enemy:IsA('BasePart') and enemy.CFrame then
@@ -534,6 +568,15 @@ local function IsTowerActive()
     return towerRaid and towerRaid.Visible or false
 end
 
+local function IsRaidActive()
+    local playerGui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return false end
+    local hud = playerGui:FindFirstChild("UI") and playerGui.UI:FindFirstChild("HUD")
+    if not hud then return false end
+    local raid = hud:FindFirstChild("Tower")
+    return raid and raid.Visible or false
+end
+
 local function GetTrialEnemy()
     local Server = game.Workspace:FindFirstChild('Server')
     if not Server then return nil end
@@ -558,11 +601,11 @@ task.spawn(function()
             local now = os.date('*t')
             local minute = now.min
             if (minute == 0 or minute == 30) and not trialJoinSent then
-                if IsTowerActive() then
-                    local bridge = GetBridgeRemote()
-                    if bridge then
-                        bridge:FireServer("Gamemodes", "TowerRaid", "Leave")
-                        print('[Trial] Leaving Tower before Trial at', os.date('%H:%M'))
+                local bridge = GetBridgeRemote()
+                if bridge then
+                    if IsRaidActive() then
+                        bridge:FireServer("Gamemodes", "Tower", "Leave")
+                        print('[Trial] Leaving Raid before Trial at', os.date('%H:%M'))
                         task.delay(2, function()
                             local bridge2 = GetBridgeRemote()
                             if bridge2 then
@@ -570,10 +613,17 @@ task.spawn(function()
                                 print('[Trial] Auto Join triggered at', os.date('%H:%M'))
                             end
                         end)
-                    end
-                else
-                    local bridge = GetBridgeRemote()
-                    if bridge then
+                    elseif IsTowerActive() then
+                        bridge:FireServer("Gamemodes", "TowerRaid", "Leave")
+                        print('[Trial] Leaving TowerRaid before Trial at', os.date('%H:%M'))
+                        task.delay(2, function()
+                            local bridge2 = GetBridgeRemote()
+                            if bridge2 then
+                                bridge2:FireServer("Gamemodes", "Trial", "Join")
+                                print('[Trial] Auto Join triggered at', os.date('%H:%M'))
+                            end
+                        end)
+                    else
                         bridge:FireServer("Gamemodes", "Trial", "Join")
                         print('[Trial] Auto Join triggered at', os.date('%H:%M'))
                     end
@@ -685,6 +735,60 @@ TrialWaveInput = TrialGroupbox:CreateInput({
     end,
 }, "TrialWaveInput")
 
+-- Bloqueia modos de menor prioridade durante a janela de Trial.
+local function IsTrialTime()
+    local minute = tonumber(os.date('%M')) or 0
+    local second = tonumber(os.date('%S')) or 0
+    if minute == 0 or minute == 30 then
+        return true
+    end
+    if minute == 1 and second <= 10 then
+        return true
+    end
+    if minute == 31 and second <= 10 then
+        return true
+    end
+    return false
+end
+
+-- Raid tem prioridade sobre TowerRaid quando o jogador pediu Create ou Join.
+local function IsRaidPriorityEnabled()
+    return (RaidAutoCreateToggle and RaidAutoCreateToggle.Values.CurrentValue)
+        or (RaidAutoJoinToggle and RaidAutoJoinToggle.Values.CurrentValue)
+end
+
+local function IsTowerBlockedByPriority()
+    return IsTrialActive() or IsTrialTime() or IsRaidActive() or IsRaidPriorityEnabled()
+end
+
+-- Raid pode interromper TowerRaid, mas nunca uma Trial ativa ou iminente.
+local function RunRaidAction(action, source)
+    if IsTrialActive() or IsTrialTime() then
+        print('[Raid] Trial has priority - skipping', source)
+        return
+    end
+
+    local bridge = GetBridgeRemote()
+    if not bridge then return end
+
+    if IsTowerActive() then
+        bridge:FireServer("Gamemodes", "TowerRaid", "Leave")
+        print('[Raid] Leaving TowerRaid for Raid priority')
+        task.delay(2, function()
+            if not IsTrialActive() and not IsTrialTime() and not IsTowerActive() and not IsRaidActive() then
+                local bridge2 = GetBridgeRemote()
+                if bridge2 then
+                    bridge2:FireServer("Gamemodes", "Tower", action)
+                    print('[Raid]', source, 'triggered after leaving TowerRaid!')
+                end
+            end
+        end)
+    elseif not IsRaidActive() then
+        bridge:FireServer("Gamemodes", "Tower", action)
+        print('[Raid]', source, 'triggered!')
+    end
+end
+
 -- ============================================
 -- AUTO TOWER
 -- ============================================
@@ -694,12 +798,14 @@ TowerAutoCreateToggle = TowerGroupbox:CreateToggle({
     Style = 2,
     Callback = function(Value)
         print('[cb] Tower AutoCreate changed to:', Value)
-        if Value then
+        if Value and not IsTowerActive() and not IsTowerBlockedByPriority() then
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Create")
                 print('[Tower] AutoCreate triggered!')
             end
+        elseif Value then
+            print('[Tower] Higher-priority mode is active - skipping AutoCreate')
         end
     end,
 }, "TowerAutoCreateToggle")
@@ -710,12 +816,14 @@ TowerAutoJoinToggle = TowerGroupbox:CreateToggle({
     Style = 2,
     Callback = function(Value)
         print('[cb] Tower AutoJoin changed to:', Value)
-        if Value then
+        if Value and not IsTowerActive() and not IsTowerBlockedByPriority() then
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Join")
                 print('[Tower] AutoJoin triggered!')
             end
+        elseif Value then
+            print('[Tower] Higher-priority mode is active - skipping AutoJoin')
         end
     end,
 }, "TowerAutoJoinToggle")
@@ -750,28 +858,68 @@ TowerWaveInput = TowerGroupbox:CreateInput({
     end,
 }, "TowerWaveInput")
 
--- Global trial time blocker: true durante todos os 60 segundos dos minutos :00 e :30
-local function IsTrialTime()
-    local minute = tonumber(os.date('%M')) or 0
-    local second = tonumber(os.date('%S')) or 0
-    -- Bloqueia durante todos os 60s dos minutos :00 e :30 + 10s extras do próximo minuto
-    if minute == 0 or minute == 30 then
-        return true
-    end
-    if minute == 1 and second <= 10 then
-        return true
-    end
-    if minute == 31 and second <= 10 then
-        return true
-    end
-    return false
-end
+-- ============================================
+-- AUTO RAID
+-- ============================================
+RaidAutoCreateToggle = RaidGroupbox:CreateToggle({
+    Name = "AutoCreate",
+    CurrentValue = false,
+    Style = 2,
+    Callback = function(Value)
+        print('[cb] Raid AutoCreate changed to:', Value)
+        if Value then
+            RunRaidAction("Create", "AutoCreate")
+        end
+    end,
+}, "RaidAutoCreateToggle")
+
+RaidAutoJoinToggle = RaidGroupbox:CreateToggle({
+    Name = "AutoJoin",
+    CurrentValue = false,
+    Style = 2,
+    Callback = function(Value)
+        print('[cb] Raid AutoJoin changed to:', Value)
+        if Value then
+            RunRaidAction("Join", "AutoJoin")
+        end
+    end,
+}, "RaidAutoJoinToggle")
+
+RaidAutoFarmToggle = RaidGroupbox:CreateToggle({
+    Name = "AutoFarm",
+    CurrentValue = false,
+    Style = 2,
+    Callback = function(Value)
+        print('[cb] Raid AutoFarm changed to:', Value)
+    end,
+}, "RaidAutoFarmToggle")
+
+RaidAutoExitToggle = RaidGroupbox:CreateToggle({
+    Name = "Auto Exit at Wave",
+    CurrentValue = false,
+    Style = 2,
+    Callback = function(Value)
+        print('[cb] Raid Auto Exit at Wave changed to:', Value)
+    end,
+}, "RaidAutoExitToggle")
+
+RaidGroupbox:CreateDivider()
+
+RaidWaveInput = RaidGroupbox:CreateInput({
+    Name = "Wave",
+    CurrentValue = "",
+    PlaceholderText = "Enter wave number...",
+    Numeric = true,
+    Callback = function(Text)
+        print('[cb] Raid Wave Input:', Text)
+    end,
+}, "RaidWaveInput")
 
 -- Auto Create loop: cria automaticamente a cada 30 segundos (only if not in Trial AND not in Tower AND not Trial time)
 task.spawn(function()
     while task.wait(30) do
         if not TowerAutoCreateToggle then break end
-        if TowerAutoCreateToggle.Values.CurrentValue and not IsTrialActive() and not IsTowerActive() and not IsTrialTime() then
+        if TowerAutoCreateToggle.Values.CurrentValue and not IsTowerActive() and not IsTowerBlockedByPriority() then
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Create")
@@ -787,7 +935,7 @@ task.spawn(function()
     while task.wait(1) do
         if not TowerAutoJoinToggle then break end
         -- Bloqueia completamente durante minutos :00 e :30
-        if TowerAutoJoinToggle.Values.CurrentValue and not IsTrialActive() and not IsTowerActive() and not towerJoinCooldown and not IsTrialTime() then
+        if TowerAutoJoinToggle.Values.CurrentValue and not IsTowerActive() and not towerJoinCooldown and not IsTowerBlockedByPriority() then
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Join")
@@ -806,7 +954,7 @@ task.spawn(function()
     local canTeleport = true
     while task.wait(1) do
         if not TowerAutoFarmToggle then break end
-        if TowerAutoFarmToggle.Values.CurrentValue and IsTowerActive() and not IsTrialActive() then
+        if TowerAutoFarmToggle.Values.CurrentValue and IsTowerActive() and not IsTrialActive() and not IsRaidActive() then
             local enemy = GetTowerEnemy()
             if enemy and canTeleport then
                 local player = game.Players.LocalPlayer
@@ -833,14 +981,15 @@ task.spawn(function()
     local exiting = false
     while task.wait(1) do
         if not TowerAutoExitToggle then break end
-        -- Sair da Tower se for horário de Trial (durante TODOS os 60 segundos dos minutos :00 e :30)
-        if not exiting and IsTowerActive() and IsTrialTime() and not IsTrialActive() then
+        -- TowerRaid cede espaço para Trial e Raid.
+        if not exiting and IsTowerActive() and (IsTrialActive() or IsTrialTime() or IsRaidActive() or IsRaidPriorityEnabled()) then
             exiting = true
-            print('[Tower] Trial time - Leaving tower!')
+            local priorityName = (IsTrialActive() or IsTrialTime()) and "Trial" or "Raid"
+            print('[Tower] ' .. priorityName .. ' has priority - Leaving TowerRaid!')
             local bridge = GetBridgeRemote()
             if bridge then
                 bridge:FireServer("Gamemodes", "TowerRaid", "Leave")
-                print('[Tower] Left tower for Trial!')
+                print('[Tower] Left TowerRaid for ' .. priorityName .. '!')
             end
             task.delay(3, function()
                 exiting = false
@@ -861,7 +1010,7 @@ task.spawn(function()
                             print('[Tower] Left tower!')
                             -- Create 2s after exit (only if not Trial time)
                             task.delay(2, function()
-                                if not IsTrialTime() then
+                                if not IsTowerBlockedByPriority() then
                                     if TowerAutoCreateToggle and TowerAutoCreateToggle.Values.CurrentValue then
                                         local bridge2 = GetBridgeRemote()
                                         if bridge2 then
@@ -878,7 +1027,117 @@ task.spawn(function()
                                         end
                                     end
                                 else
-                                    print('[Tower] Trial time - skipping Create/Join after exit')
+                                    print('[Tower] Higher-priority mode - skipping Create/Join after exit')
+                                end
+                                exiting = false
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================
+-- AUTO RAID LOOPS
+-- ============================================
+task.spawn(function()
+    while task.wait(30) do
+        if not RaidAutoCreateToggle then break end
+        if RaidAutoCreateToggle.Values.CurrentValue and not IsTrialActive() and not IsTrialTime() then
+            RunRaidAction("Create", "AutoCreate")
+        end
+    end
+end)
+
+local raidJoinCooldown = false
+task.spawn(function()
+    while task.wait(1) do
+        if not RaidAutoJoinToggle then break end
+        if RaidAutoJoinToggle.Values.CurrentValue and not raidJoinCooldown and not IsTrialActive() and not IsTrialTime() then
+            RunRaidAction("Join", "AutoJoin")
+            raidJoinCooldown = true
+            task.delay(5, function()
+                raidJoinCooldown = false
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    local canTeleport = true
+    while task.wait(1) do
+        if not RaidAutoFarmToggle then break end
+        if RaidAutoFarmToggle.Values.CurrentValue and IsRaidActive() and not IsTrialActive() and not IsTrialTime() then
+            local enemy = GetRaidEnemy()
+            if enemy and canTeleport then
+                local player = game.Players.LocalPlayer
+                if player and player.Character then
+                    local playerHrp = player.Character:FindFirstChild('HumanoidRootPart')
+                    if playerHrp then
+                        playerHrp.CFrame = enemy.CFrame
+                        canTeleport = false
+                        print('[Raid Farm] Teleported to:', enemy.Name, '| Position:', tostring(enemy.Position))
+                        task.delay(2, function()
+                            canTeleport = true
+                        end)
+                    end
+                end
+            elseif not enemy then
+                print('[Raid Farm] No enemies left - waiting for next wave...')
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    local exiting = false
+    while task.wait(1) do
+        if not RaidAutoExitToggle then break end
+        if not exiting and IsRaidActive() and (IsTrialActive() or IsTrialTime()) then
+            exiting = true
+            print('[Raid] Trial has priority - Leaving Raid!')
+            local bridge = GetBridgeRemote()
+            if bridge then
+                bridge:FireServer("Gamemodes", "Tower", "Leave")
+                print('[Raid] Left Raid for Trial!')
+            end
+            task.delay(3, function()
+                exiting = false
+            end)
+        end
+        if RaidAutoExitToggle.Values.CurrentValue and not exiting then
+            local waveInput = RaidWaveInput and RaidWaveInput.Values.CurrentValue or nil
+            if waveInput and waveInput ~= '' then
+                local targetWave = tonumber(waveInput)
+                if targetWave then
+                    local currentWave = GetCurrentRaidWave()
+                    if currentWave and currentWave >= targetWave then
+                        exiting = true
+                        print('[Raid] Wave', currentWave, 'reached target (', targetWave, ') - Leaving raid!')
+                        local bridge = GetBridgeRemote()
+                        if bridge then
+                            bridge:FireServer("Gamemodes", "Tower", "Leave")
+                            print('[Raid] Left raid!')
+                            task.delay(2, function()
+                                if not IsTrialActive() and not IsTrialTime() then
+                                    if RaidAutoCreateToggle and RaidAutoCreateToggle.Values.CurrentValue then
+                                        local bridge2 = GetBridgeRemote()
+                                        if bridge2 then
+                                            bridge2:FireServer("Gamemodes", "Tower", "Create")
+                                            print('[Raid] AutoCreate triggered after exit!')
+                                            if RaidAutoJoinToggle and RaidAutoJoinToggle.Values.CurrentValue then
+                                                local bridge3 = GetBridgeRemote()
+                                                if bridge3 then
+                                                    bridge3:FireServer("Gamemodes", "Tower", "Join")
+                                                    print('[Raid] AutoJoin triggered after create!')
+                                                end
+                                            end
+                                        end
+                                    end
+                                else
+                                    print('[Raid] Trial has priority - skipping Create/Join after exit')
                                 end
                                 exiting = false
                             end)
