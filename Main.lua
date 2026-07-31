@@ -81,7 +81,7 @@ local StatsRerollGroupbox = MainTab:CreateGroupbox({
 -- MAIN TAB: Enemies (World)
 -- ============================================
 local function GetEnemyNames()
-    local names = {}
+    local names = {} 
     local seen = {}
     local Client = game.Workspace:FindFirstChild('Client')
     if Client then
@@ -247,6 +247,26 @@ local function GetCurrentFighterTrait(fighterUUID)
         local fighter = folder:FindFirstChild(fighterUUID)
         if fighter then
             return fighter:GetAttribute('Trait')
+        end
+    end
+    return nil
+end
+
+-- Checar stat atual do fighter: { Damage = "A", UltimateDamage = "S", SpeedAttack = "B" }
+local function GetCurrentFighterStats(fighterUUID)
+    local Server = game.Workspace:FindFirstChild('Server')
+    if not Server then return nil end
+    local Fighters = Server:FindFirstChild('Fighters')
+    if not Fighters then return nil end
+    for _, folder in ipairs(Fighters:GetChildren()) do
+        local fighter = folder:FindFirstChild(fighterUUID)
+        if fighter then
+            local stats = {
+                Damage = fighter:GetAttribute('Damage') or nil,
+                UltimateDamage = fighter:GetAttribute('UltimateDamage') or nil,
+                SpeedAttack = fighter:GetAttribute('SpeedAttack') or nil,
+            }
+            return stats
         end
     end
     return nil
@@ -659,6 +679,26 @@ task.spawn(function()
             if #statsRerollQueue > 0 and #selectedStats > 0 and #selectedTargetValues > 0 then
                 local fighter = statsRerollQueue[1]
                 if fighter then
+                    -- Verificar stats atuais antes de girar
+                    local currentStats = GetCurrentFighterStats(fighter.UUID)
+                    if currentStats then
+                        for _, statName in ipairs(selectedStats) do
+                            local val = currentStats[statName]
+                            if val then
+                                for _, target in ipairs(selectedTargetValues) do
+                                    if tostring(val) == target then
+                                        -- Já está no alvo, marcar como locked sem girar
+                                        print('[Stats Reroll] Already on target:', fighter.Display, statName, '=', val)
+                                        if not statsLocked[fighter.UUID] then
+                                            statsLocked[fighter.UUID] = {}
+                                        end
+                                        statsLocked[fighter.UUID][statName] = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
                     -- Enviar Reroll com locks
                     local locks = {}
                     local statsToRoll = {}
