@@ -72,6 +72,11 @@ local RollStarsGroupbox = MainTab:CreateGroupbox({
     Column = 1,
 }, "RollStarsGroupbox")
 
+local StatsRerollGroupbox = MainTab:CreateGroupbox({
+    Name = "Auto Stats Reroll",
+    Column = 1,
+}, "StatsRerollGroupbox")
+
 -- ============================================
 -- MAIN TAB: Enemies (World)
 -- ============================================
@@ -473,6 +478,224 @@ task.spawn(function()
         end
     end
 end)
+
+-- ============================================
+-- AUTO STATS REROLL
+-- ============================================
+
+local statsRerollSelectedFighters = {}
+local statsRerollQueue = {}
+
+local function ResetStatsRerollQueue()
+    statsRerollQueue = {}
+    for _, fighter in ipairs(statsRerollSelectedFighters) do
+        table.insert(statsRerollQueue, fighter)
+    end
+end
+
+local StatsRerollDropdown = StatsRerollGroupbox:CreateLabel({
+    Name = "Select Fighters"
+}, "StatsRerollLabel"):AddDropdown({
+    Options = (function()
+        local fighters = GetFighters()
+        local names = {}
+        for _, f in ipairs(fighters) do
+            table.insert(names, f.Display)
+        end
+        return names
+    end)(),
+    CurrentOptions = {},
+    Placeholder = "None Selected",
+    MultipleOptions = true,
+    Callback = function(Options)
+        statsRerollSelectedFighters = {}
+        if Options then
+            for _, opt in ipairs(Options) do
+                local text = type(opt) == "table" and opt.Text or tostring(opt)
+                local fighters = GetFighters()
+                for _, f in ipairs(fighters) do
+                    if f.Display == text then
+                        table.insert(statsRerollSelectedFighters, f)
+                        break
+                    end
+                end
+            end
+        end
+        -- Reinicia a fila com os fighters selecionados
+        ResetStatsRerollQueue()
+        local displays = {}
+        for _, f in ipairs(statsRerollSelectedFighters) do
+            table.insert(displays, f.Display)
+        end
+        print('[cb] StatsRerollDropdown changed:', #statsRerollSelectedFighters, 'fighters:', table.concat(displays, ", "))
+    end,
+}, "StatsRerollDropdown")
+
+StatsRerollGroupbox:CreateDivider()
+
+local StatTypeLabel = StatsRerollGroupbox:CreateLabel({
+    Name = "Select Stats"
+}, "StatTypeLabel")
+
+local selectedStats = {}
+local StatTypeDropdown = StatTypeLabel:AddDropdown({
+    Options = {"Damage", "UltimateDamage", "SpeedAttack"},
+    CurrentOptions = {},
+    Placeholder = "Select stats...",
+    MultipleOptions = true,
+    Callback = function(Options)
+        selectedStats = {}
+        if Options then
+            for _, opt in ipairs(Options) do
+                local text = type(opt) == "table" and opt.Text or tostring(opt)
+                table.insert(selectedStats, text)
+            end
+        end
+        print('[cb] StatTypeDropdown changed:', table.concat(selectedStats, ", "))
+    end,
+}, "StatTypeDropdown")
+
+StatsRerollGroupbox:CreateDivider()
+
+local StatValueLabel = StatsRerollGroupbox:CreateLabel({
+    Name = "Select Target Values"
+}, "StatValueLabel")
+
+local selectedTargetValues = {}
+local StatValueDropdown = StatValueLabel:AddDropdown({
+    Options = {"S+", "S", "A", "B", "C", "D", "E"},
+    CurrentOptions = {},
+    Placeholder = "Select values...",
+    MultipleOptions = true,
+    Callback = function(Options)
+        selectedTargetValues = {}
+        if Options then
+            for _, opt in ipairs(Options) do
+                local text = type(opt) == "table" and opt.Text or tostring(opt)
+                table.insert(selectedTargetValues, text)
+            end
+        end
+        print('[cb] StatValueDropdown changed:', table.concat(selectedTargetValues, ", "))
+    end,
+}, "StatValueDropdown")
+
+StatsRerollGroupbox:CreateDivider()
+
+local AutoStatsRerollToggle = StatsRerollGroupbox:CreateToggle({
+    Name = "Auto Stats Reroll",
+    CurrentValue = false,
+    Style = 2,
+    Callback = function(Value)
+        if Value then
+            ResetStatsRerollQueue()
+        end
+        print('[cb] Auto Stats Reroll changed to:', Value)
+    end,
+}, "AutoStatsRerollToggle")
+
+-- Estado de lock por fighter: { [UUID] = { Damage = true, SpeedAttack = false, ... } }
+local statsLocked = {}
+
+-- Capturar resposta do Bridge: OnClientEvent recebe (category, sub, action, patches)
+-- onde patches é um array de { Value = "...", Path = { "Fighters", UUID, "Stats", statName } }
+local statsResponses = {}
+local bridgeForStats = GetBridgeRemote()
+if bridgeForStats then
+    bridgeForStats.OnClientEvent:Connect(function(category, sub, action, patches)
+        if category == "Data" and sub == "Manager" and action == "Patch" and type(patches) == "table" then
+            statsResponses = patches
+            print('[Stats Reroll] Received', #patches, 'patches')
+            for i, p in ipairs(patches) do
+                if type(p) == "table" and p.Path then
+                    -- Path pode vir como tabela { "Fighters", UUID, "Stats", statName }
+                    local pathStr = type(p.Path) == "table" and table.concat(p.Path, ".") or tostring(p.Path)
+                    local patchUUID = nil
+                    local patchStat = nil
+                    
+                    if type(p.Path) == "table" and #p.Path >= 4 then
+                        patchUUID = p.Path[2]
+                        patchStat = p.Path[4]
+                    else
+                        local matchUUID = pathStr:match("Fighters%.([^%.]+)%.Stats%.")
+                        local matchStat = pathStr:match("Stats%.(.+)")
+                        if matchUUID and matchStat then
+                            patchUUID = matchUUID
+                            patchStat = matchStat
+                        end
+                    end
+                    
+                    if patchUUID and patchStat then
+                        local patchValue = tostring(p.Value)
+                        print('[Stats Reroll]   [' .. i .. '] Fighter=' .. patchUUID .. ' Stat=' .. patchStat .. ' Value=' .. patchValue)
+                        
+                        -- Verificar se é uma stat selecionada e se bate com algum target
+                        for _, stat in ipairs(selectedStats) do
+                            if stat == patchStat then
+                                for _, target in ipairs(selectedTargetValues) do
+                                    if patchValue == target then
+                                        print('[Stats Reroll] LOCKING', patchStat, '=', patchValue)
+                                        if not statsLocked[patchUUID] then
+                                            statsLocked[patchUUID] = {}
+                                        end
+                                        statsLocked[patchUUID][patchStat] = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Auto Stats Reroll loop (mesmo padrão do Auto Trait: fila separada da seleção)
+local statsCooldown = false
+task.spawn(function()
+    while task.wait(0.4) do
+        if not AutoStatsRerollToggle then break end
+        if AutoStatsRerollToggle.Values.CurrentValue and not statsCooldown then
+            if #statsRerollQueue > 0 and #selectedStats > 0 and #selectedTargetValues > 0 then
+                local fighter = statsRerollQueue[1]
+                if fighter then
+                    -- Enviar Reroll com locks
+                    local locks = {}
+                    local statsToRoll = {}
+                    for _, statName in ipairs(selectedStats) do
+                        if statsLocked[fighter.UUID] and statsLocked[fighter.UUID][statName] then
+                            locks[statName] = true
+                        else
+                            table.insert(statsToRoll, statName)
+                        end
+                    end
+                    
+                    local bridge = GetBridgeRemote()
+                    if bridge and #statsToRoll > 0 then
+                        statsCooldown = true
+                        print('[Stats Reroll] Rolling:', fighter.Display, '| Stats:', table.concat(statsToRoll, ", "))
+                        bridge:FireServer("General", "Stats", "Reroll", fighter.UUID, locks, true)
+                        
+                        task.delay(0.4, function()
+                            statsCooldown = false
+                        end)
+                    elseif bridge and #statsToRoll == 0 then
+                        -- Todas as stats já estão locked para este fighter
+                        table.remove(statsRerollQueue, 1)
+                        print('[Stats Reroll] Fighter completed:', fighter.Display, '| Remaining:', #statsRerollQueue)
+                        if #statsRerollQueue == 0 then
+                            print('[Stats Reroll] All fighters completed - Stopping!')
+                            pcall(function()
+                                AutoStatsRerollToggle.Values.CurrentValue = false
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
 
 -- ============================================
 -- TRIAL/RAIDS TAB
