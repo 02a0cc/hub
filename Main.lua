@@ -1374,26 +1374,69 @@ end)
 
 -- ============================================
 -- ANTI AFK (roda automaticamente ao injetar)
+-- Simula input local de clique em vez de mover o personagem.
 -- ============================================
 task.spawn(function()
     local Players = game:GetService("Players")
     local player = Players.LocalPlayer
-    
-    print('[Anti-AFK] Running!')
-    
-    while task.wait(60) do
-        local success = pcall(function()
-            if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-                local hrp = player.Character.HumanoidRootPart
-                local current = hrp.CFrame
-                hrp.CFrame = current * CFrame.new(0.01, 0, 0)
-                task.wait(0.1)
-                hrp.CFrame = current
-            end
-        end)
-        if not success then
-            print('[Anti-AFK] Movement failed, retrying...')
+    local virtualInput = nil
+    local virtualUser = nil
+    local lastClick = 0
+
+    pcall(function()
+        virtualInput = game:GetService("VirtualInputManager")
+    end)
+    pcall(function()
+        virtualUser = game:GetService("VirtualUser")
+    end)
+
+    local function SimulateLocalClick(source)
+        -- Evita dois cliques quase ao mesmo tempo se o Idled disparar junto do timer.
+        if os.clock() - lastClick < 2 then
+            return
         end
+        lastClick = os.clock()
+
+        local camera = workspace.CurrentCamera
+        local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+        -- Clique direito no canto da tela para evitar ativar botões da interface do jogo.
+        local x = math.max(2, viewport.X - 2)
+        local y = math.max(2, viewport.Y - 2)
+        local sent = false
+
+        if virtualInput then
+            local inputSuccess = pcall(function()
+                -- MouseButton2: clique direito local, pressionar e soltar.
+                virtualInput:SendMouseButtonEvent(x, y, 1, true, game, 0)
+                task.wait(0.05)
+                virtualInput:SendMouseButtonEvent(x, y, 1, false, game, 0)
+            end)
+            sent = inputSuccess
+        end
+
+        -- Fallback para executores que não expõem VirtualInputManager.
+        if not sent and virtualUser then
+            sent = pcall(function()
+                virtualUser:CaptureController()
+                virtualUser:ClickButton2(Vector2.new(x, y))
+            end)
+        end
+
+        if sent then
+            print('[Anti-AFK] Local click simulated (' .. source .. ').')
+        else
+            print('[Anti-AFK] Unable to simulate local input in this executor.')
+        end
+    end
+
+    -- Dispara uma atividade periódica e também reage ao aviso de inatividade do Roblox.
+    player.Idled:Connect(function()
+        SimulateLocalClick('Idled')
+    end)
+
+    print('[Anti-AFK] Running with local click simulation!')
+    while task.wait(60) do
+        SimulateLocalClick('Timer')
     end
 end)
 
